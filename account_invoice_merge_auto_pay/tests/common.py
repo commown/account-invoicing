@@ -3,7 +3,7 @@ from odoo.tests.common import at_install, post_install
 
 from odoo.addons.account_invoice_merge_auto.tests.common import \
     AutoMergeInvoiceTC
-
+from odoo.addons.queue_job.tests.common import trap_jobs
 
 def fake_do_tx_ok(self, *args, **kwargs):
     return True
@@ -15,10 +15,6 @@ class AutoPayInvoiceTC(AutoMergeInvoiceTC):
 
     def setUp(self):
         super(AutoPayInvoiceTC, self).setUp()
-        self.env = self.env(context=dict(
-            self.env.context,
-            test_queue_job_no_delay=True,
-        ))
         # Maybe the acquirer should be chosen more carefully
         acquirer = self.env["payment.acquirer"].search([
             ("name", "=", "Ingenico")]).ensure_one()
@@ -47,7 +43,11 @@ class AutoPayInvoiceTC(AutoMergeInvoiceTC):
                         for date in ("2019-05-09", "2019-05-10")]
 
         Invoice = self.env["account.invoice"]
-        _invs, merge_infos = Invoice._cron_invoice_merge("2019-05-16")
+        with trap_jobs() as trap:
+            _invs, merge_infos = Invoice._cron_invoice_merge("2019-05-16")
+        new_invoices = Invoice.browse(merge_infos.keys())
+        trap.assert_jobs_count(1, only=new_invoices._invoice_merge_auto_pay_invoice_job)
+        trap.perform_enqueued_jobs()
 
         self.assertEqual(len(merge_infos), 1)
         new_inv = Invoice.browse(
